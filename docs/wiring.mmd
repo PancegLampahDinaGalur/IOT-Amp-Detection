@@ -1,0 +1,42 @@
+%% Wiring diagram for JXK sensor -> divider -> ESP32 (mermaid)
+graph LR
+  subgraph Adapter24V[24V Supply]
+    A24P(+24V)
+    A24N(GND)
+  end
+
+  subgraph Sensor[JXK 0-150A Sensor]
+    PWR[PWR+]
+    COM[COM]
+    OUT[OUT]
+  end
+
+  subgraph Buck[Buck Converter]
+    BINP(IN+)
+    BINN(IN-)
+    BOUTP(OUT+ 5V)
+    BOUTN(OUT- GND)
+  end
+
+  subgraph ESP32[ESP32]
+    VIN(VIN / 5V)
+    GND( GND )
+    ADC(GPIO34)
+  end
+
+  %% connections
+  A24P -->|+24V| PWR
+  A24N -->|GND| COM
+  A24P -->|+24V| BINP
+  A24N -->|GND| BINN
+
+  BOUTP -->|5V| VIN
+  BOUTN -->|GND| GND
+
+  COM -.->|common ground| GND
+  BINN -.->|common ground| GND
+
+  OUT --> R1["R1 10k"] --> NodeA((Node A))
+  NodeA -->|to ADC via Rseries (opt)| Rser["Rseries 1k (opt)"] --> ADC
+  NodeA --> R2["R2 15k"] --> COM
+  NodeA --> Cfilter["Cfilter 0.1uF"] --> COM
