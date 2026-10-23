@@ -1,97 +1,91 @@
 #include <Arduino.h>
 
-// JXK-7202308 example config
-// Sensor output: 0–5V DC proportional to current
-// Recommended wiring for ESP32 ADC safety:
-// SENSOR OUT -> 10k -> ADC GPIO34
-// ADC GPIO34 -> 10k -> GND
-// Divider ratio = 10k / (10k + 10k) = 0.5
-// So 5V sensor output becomes 2.5V at ADC, safely below 3.3V
+const int ADC_PIN = 34;               // GPIO34 (ADC1_CH6)
+const float V_REF = 3.3f;             // ESP32 ADC Reference Voltage
+const int ADC_MAX = 4095;             // 12-bit ADC Resolution
 
-const int ADC_PIN = 34;              // ADC1 channel (GPIO34)
-const float V_REF = 3.3f;            // ESP32 ADC reference voltage
-const int ADC_MAX = 4095;            // 12-bit ADC resolution
-
-const float R_TOP = 10.0f;           // Upper resistor to sensor output
-const float R_BOTTOM = 10.0f;         // Lower resistor to GND
+const float R_TOP = 10.0f;            // Resistor Pembagi Tegangan Atas (kOhm)
+const float R_BOTTOM = 10.0f;         // Resistor Pembagi Tegangan Bawah (kOhm)
 const float dividerRatio = R_BOTTOM / (R_TOP + R_BOTTOM); // = 0.5
 
-const float sensorOutputMaxV = 5.0f; // Sensor full-scale output voltage
-const float sensorFullScaleA = 150.0f; // <-- update if your exact JXK-7202308 range differs
+const float sensorOutputMaxV = 5.0f;  // Output Maksimal Sensor (0-5V)
+const float sensorFullScaleA = 150.0f;// Range Sensor JXK (misal: 0-150A)
 const float sensorSensitivity_VperA = sensorOutputMaxV / sensorFullScaleA;
 
-const int SAMPLES = 200;
-const float FILTER_ALPHA = 0.15f;  // smoothing factor for low-pass filter
+const int SAMPLES = 100;              // Ditingkatkan efisiensinya
+const float FILTER_ALPHA = 0.2f;      // Low-pass filter coefficient
 
 float zeroOffsetSensorV = 0.0f;
 float filteredSensorV = 0.0f;
 float zeroOffsetCurrentA = 0.0f;
 
-void calibrateZero() {
+// Fungsi membaca ADC secara cepat tanpa memblokir CPU
+float getDirectSensorVoltage() {
   unsigned long sum = 0;
-  const int CAL_SAMPLES = 200;
-
-  for (int i = 0; i < CAL_SAMPLES; ++i) {
+  for (int i = 0; i < SAMPLES; ++i) {
     sum += analogRead(ADC_PIN);
-    delay(5);
+    delayMicroseconds(100); // 100us x 100 = hanya 10ms total!
+  }
+  float avgRaw = (float)sum / (float)SAMPLES;
+  float vAdc = (avgRaw / (float)ADC_MAX) * V_REF;
+  return vAdc / dividerRatio; // Konversi balik ke tegangan asli sensor (0-5V)
+}
+
+void calibrateZero() {
+  float sumV = 0.0f;
+  const int CAL_LOOPS = 20;
+  
+  for (int i = 0; i < CAL_LOOPS; ++i) {
+    sumV += getDirectSensorVoltage();
+    delay(20);
   }
 
-  float avgRaw = (float)sum / (float)CAL_SAMPLES;
-  float vAdc = (avgRaw / ADC_MAX) * V_REF;
-  zeroOffsetSensorV = vAdc / dividerRatio;
+  zeroOffsetSensorV = sumV / (float)CAL_LOOPS;
+  
+  // Jika sensor JXK murni 0V saat 0A, kita batasi offset yang tidak wajar
+  if (zeroOffsetSensorV < 0.0f) zeroOffsetSensorV = 0.0f;
+  
   zeroOffsetCurrentA = zeroOffsetSensorV / sensorSensitivity_VperA;
   filteredSensorV = zeroOffsetSensorV;
 }
 
-float readFilteredSensorVoltage() {
-  unsigned long sum = 0;
-
-  for (int i = 0; i < SAMPLES; ++i) {
-    sum += analogRead(ADC_PIN);
-    delay(5);
-  }
-
-  float avgRaw = (float)sum / (float)SAMPLES;
-  float vAdc = (avgRaw / ADC_MAX) * V_REF;
-  float vSensor = vAdc / dividerRatio;
-
-  // First-order low-pass filter to reduce ADC noise
-  filteredSensorV = (FILTER_ALPHA * vSensor) + ((1.0f - FILTER_ALPHA) * filteredSensorV);
-  return filteredSensorV;
-}
-
 void setup() {
   Serial.begin(115200);
-  delay(200);
+  delay(500);
 
   pinMode(ADC_PIN, INPUT);
   analogSetPinAttenuation(ADC_PIN, ADC_11db);
 
-  Serial.println("ESP32 JXK-7202308 Current Reader");
-  Serial.println("Make sure no current flows during calibration.");
+  Serial.println("\nESP32 JXK-7202308 Current Reader");
+  Serial.println("Memulai Kalibrasi Titik Nol (Pastikan Tidak Ada Arus)...");
 
   calibrateZero();
 
-  Serial.print("Zero offset sensor voltage: ");
+  Serial.print("Zero Offset Sensor Voltage: ");
   Serial.print(zeroOffsetSensorV, 4);
   Serial.println(" V");
-  Serial.print("Zero offset current: ");
+  Serial.print("Zero Offset Current: ");
   Serial.print(zeroOffsetCurrentA, 4);
   Serial.println(" A");
   Serial.println("--------------------------------------");
 }
 
 void loop() {
-  float vSensor = readFilteredSensorVoltage();
-  float currentA = (vSensor - zeroOffsetSensorV) / sensorSensitivity_VperA;
+  // Read & Filter Voltage
+  float rawVSensor = getDirectSensorVoltage();
+  filteredSensorV = (FILTER_ALPHA * rawVSensor) + ((1.0f - FILTER_ALPHA) * filteredSensorV);
 
-  if (currentA < 0.0f) {
+  // Hitung Arus Bersih (dikurangi Offset)
+  float currentA = (filteredSensorV - zeroOffsetSensorV) / sensorSensitivity_VperA;
+
+  // Threshold / Deadband untuk menghilangkan Noise saat 0 Ampere
+  if (currentA < 0.05f) { // Jika pembacaan < 0.05A (50mA), anggap murni 0A
     currentA = 0.0f;
   }
 
-  // Send JSON line to Raspberry Pi for database logging
+  // Kirim JSON ke Raspberry Pi
   Serial.print("{\"v_sensor\":");
-  Serial.print(vSensor, 4);
+  Serial.print(filteredSensorV, 4);
   Serial.print(",\"v_zero\":");
   Serial.print(zeroOffsetSensorV, 4);
   Serial.print(",\"zero_offset_a\":");
@@ -99,6 +93,7 @@ void loop() {
   Serial.print(",\"current_a\":");
   Serial.print(currentA, 3);
   Serial.println("}");
-
-  delay(1000);
+  
+  Serial.flush(); // Memastikan transmisi serial selesai penuh
+  delay(1000);   // Jeda 1 detik antar pengiriman
 }
