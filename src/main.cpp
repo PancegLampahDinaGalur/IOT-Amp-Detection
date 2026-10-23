@@ -9,10 +9,10 @@ const float R_BOTTOM = 10.0f;         // Resistor Pembagi Tegangan Bawah (kOhm)
 const float dividerRatio = R_BOTTOM / (R_TOP + R_BOTTOM); // = 0.5
 
 const float sensorOutputMaxV = 5.0f;  // Output Maksimal Sensor (0-5V)
-const float sensorFullScaleA = 150.0f;// Range Sensor JXK (misal: 0-150A)
+const float sensorFullScaleA = 150.0f;// Range Sensor JXK (0-150A)
 const float sensorSensitivity_VperA = sensorOutputMaxV / sensorFullScaleA;
 
-const int SAMPLES = 100;              // Ditingkatkan efisiensinya
+const int SAMPLES = 100;              // Jumlah sampel pembacaan
 const float FILTER_ALPHA = 0.2f;      // Low-pass filter coefficient
 
 float zeroOffsetSensorV = 0.0f;
@@ -42,7 +42,7 @@ void calibrateZero() {
 
   zeroOffsetSensorV = sumV / (float)CAL_LOOPS;
   
-  // Jika sensor JXK murni 0V saat 0A, kita batasi offset yang tidak wajar
+  // Batasi agar offset tidak bernilai negatif
   if (zeroOffsetSensorV < 0.0f) zeroOffsetSensorV = 0.0f;
   
   zeroOffsetCurrentA = zeroOffsetSensorV / sensorSensitivity_VperA;
@@ -79,7 +79,8 @@ void loop() {
   float currentA = (filteredSensorV - zeroOffsetSensorV) / sensorSensitivity_VperA;
 
   // Threshold / Deadband untuk menghilangkan Noise saat 0 Ampere
-  if (currentA < 0.05f) { // Jika pembacaan < 0.05A (50mA), anggap murni 0A
+  // Jika hasil perhitungan kurang dari 0.40A (400mA) atau bernilai negatif, paksa jadi 0A
+  if (currentA < 0.40f) { 
     currentA = 0.0f;
   }
 
